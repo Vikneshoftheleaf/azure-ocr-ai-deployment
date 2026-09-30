@@ -1,175 +1,289 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  CalendarDays,
+  Check,
+  Clock3,
+  FileCode2,
+  FileSpreadsheet,
+  FileText,
+  FileType,
+  Image as ImageIcon,
+  LayoutGrid,
+  LoaderCircle,
+  Plus,
+  Presentation,
+  Search,
+  Sparkles,
+  UploadCloud,
+  X,
+} from "lucide-react";
+import WorkspaceSidebar from "@/app/components/workspace-sidebar";
+
+const acceptedTypes =
+  ".pdf,.jpg,.jpeg,.png,.bmp,.tif,.tiff,.heic,.heif,.docx,.xlsx,.pptx,.html,.htm";
+const filters = ["All files", "PDF", "Images", "Office & HTML"];
+
+function getExtension(filename = "") {
+  return filename.split(".").pop()?.toLowerCase() || "file";
+}
+
+function getCategory(document) {
+  const extension = getExtension(document.filename);
+  const contentType = (document.content_type || "").toLowerCase();
+
+  if (
+    contentType.startsWith("image/") ||
+    ["jpg", "jpeg", "png", "bmp", "tif", "tiff", "heic", "heif"].includes(extension)
+  ) {
+    return "Images";
+  }
+  if (extension === "pdf" || contentType === "application/pdf") return "PDF";
+  return "Office & HTML";
+}
+
+function getFileIcon(document) {
+  const extension = getExtension(document.filename);
+  const category = getCategory(document);
+
+  if (category === "Images") return ImageIcon;
+  if (extension === "xlsx") return FileSpreadsheet;
+  if (extension === "pptx") return Presentation;
+  if (["html", "htm"].includes(extension)) return FileCode2;
+  if (["docx", "doc"].includes(extension)) return FileType;
+  return FileText;
+}
+
+function formatDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(date);
+}
+
+function formatRelativeDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Recently added";
+
+  const days = Math.floor((Date.now() - date.getTime()) / 86_400_000);
+  if (days < 1) return "Added today";
+  if (days === 1) return "Added yesterday";
+  if (days < 7) return `Added ${days} days ago`;
+  return `Added ${formatDate(value)}`;
+}
 
 export default function Home() {
-  const [file, setFile] = useState(null);
-  const [result, setResult] = useState("");
+  const router = useRouter();
+  const fileInputRef = useRef(null);
   const [documents, setDocuments] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [activeFilter, setActiveFilter] = useState("All files");
+  const [search, setSearch] = useState("");
   const [loadingDocuments, setLoadingDocuments] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState("");
 
-  async function fetchDocuments() {
-    try {
-      setLoadingDocuments(true);
-
-      const response = await fetch("/api/documents");
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch documents");
-      }
-
-      const data = await response.json();
-
-      setDocuments(data.documents);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoadingDocuments(false);
-    }
-  }
-
   useEffect(() => {
-    fetchDocuments();
+    let isCurrent = true;
+
+    async function loadDocuments() {
+      try {
+        const response = await fetch("/api/documents");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not load documents.");
+        if (isCurrent) setDocuments(data.documents || []);
+      } catch (loadError) {
+        if (isCurrent) setError(loadError.message);
+      } finally {
+        if (isCurrent) setLoadingDocuments(false);
+      }
+    }
+
+    loadDocuments();
+    return () => {
+      isCurrent = false;
+    };
   }, []);
 
-  async function handleAnalyze() {
-    if (!file) return;
+  const visibleDocuments = documents.filter((document) => {
+    const matchesFilter = activeFilter === "All files" || getCategory(document) === activeFilter;
+    const query = search.trim().toLowerCase();
+    const matchesSearch =
+      !query ||
+      document.filename.toLowerCase().includes(query) ||
+      (document.ocr_preview || "").toLowerCase().includes(query);
+    return matchesFilter && matchesSearch;
+  });
 
-    setLoading(true);
-    setResult("");
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+  const addedThisMonth = documents.filter(
+    (document) => new Date(document.created_at) >= monthStart,
+  ).length;
+  const formatCount = new Set(documents.map(getCategory)).size;
+
+  function chooseFile(file) {
+    if (!file) return;
+    setSelectedFile(file);
+    setError("");
+  }
+
+  async function handleAnalyze() {
+    if (!selectedFile) return;
+
+    setUploading(true);
     setError("");
 
     try {
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", selectedFile);
 
       const response = await fetch("/api/analyze", {
         method: "POST",
         body: formData,
       });
-
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Analysis failed");
+        throw new Error(data.error || data.details || "Analysis failed.");
       }
 
-      setResult(data.text);
-
-      // Refresh document list
-      fetchDocuments();
-    } catch (error) {
-      setError(error.message);
-    } finally {
-      setLoading(false);
+      router.push(`/documents/${encodeURIComponent(data.id)}`);
+    } catch (uploadError) {
+      setError(uploadError.message);
+      setUploading(false);
     }
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 px-6 py-12">
-      <div className="mx-auto max-w-5xl">
-        {/* Header */}
+    <div className="workspace-shell">
+      <WorkspaceSidebar documentCount={documents.length} />
+      <main className="workspace-main">
+        <header className="topbar">
+          <div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-divider">/</span><strong>Dashboard</strong></div>
+          <div className="topbar-right"><span className="workspace-status"><span />Workspace active</span><div className="avatar-mark">AD</div></div>
+        </header>
 
-        <div>
-          <h1 className="text-4xl font-bold text-gray-900">
-            AI Document Analyzer
-          </h1>
-
-          <p className="mt-2 text-gray-600">
-            Upload documents, extract text with Azure AI, and store them in
-            Azure SQL.
-          </p>
-        </div>
-
-        {/* Upload */}
-
-        <div className="mt-8 rounded-xl border bg-white p-6 shadow-sm">
-          <h2 className="text-xl font-semibold">Analyze Document</h2>
-
-          <input
-            type="file"
-            accept=".pdf,.jpg,.jpeg,.png,.bmp,.tiff,.heif"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-            className="mt-5 block w-full text-sm"
-          />
-
-          {file && (
-            <p className="mt-3 text-sm text-gray-500">Selected: {file.name}</p>
-          )}
-
-          <button
-            onClick={handleAnalyze}
-            disabled={!file || loading}
-            className="mt-5 rounded-lg bg-black px-5 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {loading ? "Analyzing..." : "Analyze Document"}
-          </button>
-
-          {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
-        </div>
-
-        {/* Current OCR result */}
-
-        {result && (
-          <div className="mt-6 rounded-xl border bg-white p-6 shadow-sm">
-            <h2 className="text-xl font-semibold">Extracted Text</h2>
-
-            <div className="mt-4 whitespace-pre-wrap rounded-lg bg-gray-50 p-5 text-sm leading-7">
-              {result}
+        <div className="dashboard-content">
+          <section className="page-intro">
+            <div>
+              <div className="eyebrow"><span className="eyebrow-line" />DOCUMENT INTELLIGENCE</div>
+              <h1>Your document library</h1>
+              <p>Scan, search, and revisit every document in one place.</p>
             </div>
-          </div>
-        )}
+            <a className="quiet-link" href="#documents">Browse library <ArrowRight size={15} /></a>
+          </section>
 
-        {/* Document history */}
-
-        <div className="mt-10">
-          <h2 className="text-2xl font-bold text-gray-900">Documents</h2>
-
-          {loadingDocuments ? (
-            <p className="mt-4 text-gray-500">Loading documents...</p>
-          ) : documents.length === 0 ? (
-            <div className="mt-4 rounded-xl border bg-white p-8 text-center text-gray-500">
-              No documents yet.
+          <section className="stats-grid" aria-label="Library overview">
+            <div className="stat-block">
+              <div className="stat-icon stat-icon-green"><LayoutGrid size={17} /></div>
+              <div><span className="stat-label">IN YOUR LIBRARY</span><strong>{documents.length}</strong><span className="stat-note">{documents.length === 1 ? "document" : "documents"} total</span></div>
             </div>
-          ) : (
-            <div className="mt-4 space-y-4">
-              {documents.map((document) => (
-                <div
-                  key={document.id}
-                  className="rounded-xl border bg-white p-5 shadow-sm"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <a
-                        href={`/documents/${document.id}`}
-                        className="font-semibold text-gray-900 hover:underline"
-                      >
-                        {document.filename}
-                      </a>
+            <div className="stat-block">
+              <div className="stat-icon stat-icon-coral"><CalendarDays size={17} /></div>
+              <div><span className="stat-label">THIS MONTH</span><strong>{addedThisMonth}</strong><span className="stat-note">newly analyzed</span></div>
+            </div>
+            <div className="stat-block">
+              <div className="stat-icon stat-icon-blue"><Sparkles size={17} /></div>
+              <div><span className="stat-label">FORMATS</span><strong>{formatCount}</strong><span className="stat-note">file types supported</span></div>
+            </div>
+          </section>
 
-                      <p className="mt-1 text-xs text-gray-500">
-                        {document.content_type}
-                      </p>
-                    </div>
-
-                    <p className="text-xs text-gray-500">
-                      {new Date(document.created_at).toLocaleString()}
-                    </p>
-                  </div>
-
-                  <div className="mt-4 max-h-32 overflow-hidden rounded-lg bg-gray-50 p-4">
-                    <p className="whitespace-pre-wrap text-sm text-gray-700">
-                      {document.ocr_text}
-                    </p>
-                  </div>
+          <section className={`upload-panel${isDragging ? " upload-panel-dragging" : ""}`} id="upload">
+            <div className="upload-panel-copy">
+              <div className="upload-symbol"><UploadCloud size={21} strokeWidth={1.8} /></div>
+              <div>
+                <div className="upload-title-line"><h2>Analyze a document</h2><span className="new-tag">NEW SCAN</span></div>
+                <p>Extract searchable text from a file with Azure AI.</p>
+              </div>
+            </div>
+            <input
+              ref={fileInputRef}
+              className="visually-hidden"
+              type="file"
+              accept={acceptedTypes}
+              onChange={(event) => chooseFile(event.target.files?.[0])}
+            />
+            {!selectedFile ? (
+              <div
+                className="drop-zone"
+                role="button"
+                tabIndex={0}
+                onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") fileInputRef.current?.click();
+                }}
+                onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setIsDragging(false);
+                  chooseFile(event.dataTransfer.files?.[0]);
+                }}
+              >
+                <span className="drop-copy"><strong>Drop a file here</strong><span>or choose from your device</span></span>
+                <button className="button-secondary" type="button" onClick={(event) => { event.stopPropagation(); fileInputRef.current?.click(); }}><Plus size={15} /> Choose file</button>
+              </div>
+            ) : (
+              <div className="selected-file-row">
+                <div className="selected-file-info"><div className="file-icon file-icon-neutral"><FileText size={18} /></div><div className="selected-file-name"><strong title={selectedFile.name}>{selectedFile.name}</strong><span>{(selectedFile.size / 1024 / 1024).toFixed(2)} MB · Ready to scan</span></div><span className="ready-check"><Check size={14} /></span></div>
+                <div className="selected-file-actions">
+                  <button className="icon-button" aria-label="Remove selected file" title="Remove file" disabled={uploading} onClick={() => { setSelectedFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}><X size={17} /></button>
+                  <button className="button-primary" disabled={uploading} onClick={handleAnalyze}>{uploading ? <><LoaderCircle className="spin" size={16} /> Analyzing</> : <><Sparkles size={15} /> Analyze file</>}</button>
                 </div>
-              ))}
+              </div>
+            )}
+            <div className="upload-footnote"><span>PDF</span><i /> <span>Images</span><i /> <span>Office</span><i /> <span>HTML</span><span className="upload-footnote-limit">One file at a time</span></div>
+            {error && <p className="inline-error" role="alert">{error}</p>}
+          </section>
+
+          <section className="library-section" id="documents">
+            <div className="section-heading">
+              <div><div className="section-kicker">YOUR WORKSPACE</div><h2>Documents <span className="count-pill">{documents.length}</span></h2></div>
+              <div className="library-meta"><Clock3 size={14} /> Latest activity first</div>
             </div>
-          )}
+            <div className="library-toolbar">
+              <label className="search-field"><Search size={17} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names or extracted text" aria-label="Search documents" />{search && <button className="search-clear" onClick={() => setSearch("")} aria-label="Clear search"><X size={14} /></button>}</label>
+              <div className="filter-tabs" role="tablist" aria-label="Filter documents">
+                {filters.map((filter) => <button key={filter} role="tab" aria-selected={activeFilter === filter} className={activeFilter === filter ? "filter-tab active" : "filter-tab"} onClick={() => setActiveFilter(filter)}>{filter}</button>)}
+              </div>
+            </div>
+
+            <div className="document-list">
+              <div className="document-list-header"><span>DOCUMENT</span><span>TYPE</span><span>ADDED</span><span /></div>
+              {loadingDocuments ? (
+                <div className="list-state"><LoaderCircle className="spin" size={19} /> Loading your library</div>
+              ) : visibleDocuments.length === 0 ? (
+                <div className="empty-state"><div className="empty-icon"><FileText size={23} /></div><h3>{documents.length ? "No matching documents" : "Your library is ready"}</h3><p>{documents.length ? "Try another search or file type." : "Upload a document above to create your first searchable record."}</p>{documents.length > 0 && <button className="text-button" onClick={() => { setSearch(""); setActiveFilter("All files"); }}>Clear filters</button>}</div>
+              ) : (
+                visibleDocuments.map((document) => {
+                  const Icon = getFileIcon(document);
+                  return (
+                    <a className="document-row" key={document.id} href={`/documents/${document.id}`}>
+                      <div className="document-primary"><div className={`file-icon ${getCategory(document) === "Images" ? "file-icon-image" : getCategory(document) === "PDF" ? "file-icon-pdf" : "file-icon-doc"}`}><Icon size={18} strokeWidth={1.8} /></div><div className="document-name-block"><strong title={document.filename}>{document.filename}</strong><span className="document-preview" title={document.ocr_preview || "No text preview available"}>{document.ocr_preview || "No text preview available"}</span></div></div>
+                      <div className="document-type"><span className="type-badge">{getExtension(document.filename).toUpperCase()}</span><span>{getCategory(document)}</span></div>
+                      <div className="document-date"><span>{formatDate(document.created_at)}</span><small>{formatRelativeDate(document.created_at)}</small></div>
+                      <div className="document-open"><ArrowUpRight size={17} /></div>
+                    </a>
+                  );
+                })
+              )}
+            </div>
+            <div className="library-bottom-note"><span><Check size={13} /> OCR text is stored with each document</span><span>{visibleDocuments.length} of {documents.length} shown</span></div>
+          </section>
+
+          <footer className="dashboard-footer"><span>Folio <span className="footer-dot">·</span> Document intelligence workspace</span><span>Azure-connected document processing</span></footer>
         </div>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

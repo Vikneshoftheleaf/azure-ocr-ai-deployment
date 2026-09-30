@@ -9,7 +9,7 @@ export async function GET() {
         id,
         filename,
         content_type,
-        ocr_text,
+        LEFT(ocr_text, 520) AS ocr_preview,
         created_at
       FROM documents
       ORDER BY created_at DESC

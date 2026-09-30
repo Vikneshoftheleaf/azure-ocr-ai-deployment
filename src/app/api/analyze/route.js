@@ -48,13 +48,14 @@ export async function POST(request) {
     const text = result.analyzeResult?.content || "";
     const db = await getDb();
 
-    await db
+    const insertResult = await db
       .request()
       .input("filename", file.name)
       .input("content_type", file.type)
       .input("ocr_text", text).query(`
     INSERT INTO documents
       (filename, content_type, ocr_text)
+    OUTPUT INSERTED.id AS id
     VALUES
       (@filename, @content_type, @ocr_text)
   `);
@@ -67,6 +68,7 @@ export async function POST(request) {
     }
 
     return Response.json({
+      id: insertResult.recordset[0].id,
       filename: file.name,
       text,
     });
