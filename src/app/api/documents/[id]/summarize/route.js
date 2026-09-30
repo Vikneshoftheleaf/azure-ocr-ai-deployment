@@ -1,10 +1,24 @@
 import OpenAI from "openai";
 import { getDb } from "@/lib/db";
 
-const client = new OpenAI({
-  baseURL: `${process.env.AZURE_FOUNDRY_PROJECT_ENDPOINT}/openai/v1`,
-  apiKey: process.env.AZURE_FOUNDRY_API_KEY,
-});
+function getClient() {
+  const endpoint =
+    process.env.AZURE_FOUNDRY_PROJECT_ENDPOINT;
+
+  const apiKey =
+    process.env.AZURE_FOUNDRY_API_KEY;
+
+  if (!endpoint || !apiKey) {
+    throw new Error(
+      "Azure Foundry environment variables are missing"
+    );
+  }
+
+  return new OpenAI({
+    baseURL: `${endpoint}/openai/v1`,
+    apiKey,
+  });
+}
 
 export async function POST(request, { params }) {
   try {
@@ -29,6 +43,7 @@ export async function POST(request, { params }) {
     }
 
     const document = result.recordset[0];
+    const client = getClient();
 
     const response = await client.responses.create({
       model: process.env.AZURE_FOUNDRY_MODEL,

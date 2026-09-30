@@ -1,53 +1,72 @@
 import DocumentIntelligence from "@azure-rest/ai-document-intelligence";
 import { AzureKeyCredential } from "@azure/core-auth";
 
-const endpoint = process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT;
-const key = process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY;
+let client;
 
-const client = DocumentIntelligence(
-  endpoint,
-  new AzureKeyCredential(key)
-);
+function getClient() {
+  if (client) return client;
+
+  const endpoint =
+    process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT;
+  const key =
+    process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY;
+
+  if (!endpoint || !key) {
+    throw new Error(
+      "Azure Document Intelligence environment variables are missing"
+    );
+  }
+
+  client = DocumentIntelligence(
+    endpoint,
+    new AzureKeyCredential(key)
+  );
+
+  return client;
+}
 
 export async function analyzeDocument(buffer, contentType) {
-  const initialResponse = await client
+  const azureClient = getClient();
+
+  const response = await azureClient
     .path("/documentModels/{modelId}:analyze", "prebuilt-read")
     .post({
       contentType,
       body: buffer,
     });
 
-  if (initialResponse.status !== "202") {
+  if (response.status !== "202") {
     throw new Error(
-      `Document Intelligence error: ${initialResponse.status}`
+      `Azure OCR request failed: ${response.status}`
     );
   }
 
   const operationLocation =
-    initialResponse.headers["operation-location"];
+    response.headers["operation-location"];
 
-  while (true) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+  if (!operationLocation) {
+    throw new Error("Missing operation location");
+  }
 
-    const response = await client
+  for (let i = 0; i < 60; i++) {
+    await new Promise((resolve) =>
+      setTimeout(resolve, 1000)
+    );
+
+    const pollResponse = await azureClient
       .pathUnchecked(operationLocation)
       .get();
 
-    if (response.status !== "200") {
-      throw new Error(
-        `OCR operation failed: ${response.status}`
-      );
+    if (pollResponse.status === 200) {
+      return pollResponse.body.analyzeResult?.content || "";
     }
 
-    if (response.body.status === "succeeded") {
-      return response.body;
-    }
-
-    if (["failed", "canceled", "skipped"].includes(response.body.status)) {
+    if (pollResponse.status !== 202) {
       throw new Error(
-        response.body.error?.message ||
-          `OCR operation ${response.body.status}`
+        `Azure OCR polling failed: ${pollResponse.status}`
       );
     }
   }
+
+  throw new Error("Azure OCR timed out");
 }
