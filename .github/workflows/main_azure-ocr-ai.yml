@@ -1,46 +1,69 @@
-name: Deploy Next.js to Azure
+name: Build and deploy Node.js app to Azure Web App - azure-ocr-ai
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js version
+        uses: actions/setup-node@v4
         with:
-          node-version: 22.x
+          node-version: '22.x'
           cache: npm
 
-      - run: npm ci
-      - run: npm run build
+      - name: npm install and build
+        run: |
+          npm ci
+          npm run build
 
       - name: Prepare standalone output
         run: |
+          mkdir -p .next/standalone/.next
           cp -r .next/static .next/standalone/.next/static
-          cp -r public .next/standalone/public
+          if [ -d public ]; then cp -r public .next/standalone/public; fi
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifact for deployment job
+        uses: actions/upload-artifact@v4
         with:
-          name: app
+          name: node-app
           path: .next/standalone
-          include-hidden-files: true   # .next is a hidden folder; it's skipped without this
+          include-hidden-files: true
 
   deploy:
-    needs: build
     runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      id-token: write
+      contents: read
+
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
         with:
-          name: app
+          name: node-app
           path: app
 
-      - uses: azure/webapps-deploy@v3
+      - name: Login to Azure
+        uses: azure/login@v2
         with:
-          app-name: azure-ocr-ai
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_F91AD12428F7459C92F96847A96E228E }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_89941C33D04141BFB86CBD8CBF5C1A8A }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_E73BACA4EB0A417397E84265C9227ECB }}
+
+      - name: 'Deploy to Azure Web App'
+        id: deploy-to-webapp
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'azure-ocr-ai'
+          slot-name: 'Production'
           package: app
